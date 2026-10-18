@@ -1,0 +1,10 @@
+streamlit
+torch
+transformers>=4.45.0
+accelerate
+pillow
+scikit-learn
+joblib
+numpy
+qwen-vl-utils
+torchvision
