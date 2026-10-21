@@ -76,7 +76,7 @@ for c in class_names:
 
 # Header
 st.markdown('<div class="main-header">🌾 Multi-Crop Pathology Diagnostic Suite</div>', unsafe_allow_html=True)
-st.markdown('<div class="sub-header">Automated disease classification with embedded Vision-Language semantic representations.</div>', unsafe_allow_html=True)
+st.markdown('<div class="sub-header">Automated disease classification with multi-crop spatial aggregation and semantic Vision-Language representations.</div>', unsafe_allow_html=True)
 
 col1, col2 = st.columns([1, 1], gap="large")
 
@@ -92,8 +92,30 @@ with col2:
     st.subheader("2. Diagnostic Evaluation")
     if uploaded_file is not None:
         if st.button("Run Diagnostic Engine", type="primary"):
-            with st.spinner("Extracting multimodal visual representations..."):
-                inputs = processor(images=image, return_tensors="pt")
+            with st.spinner("Extracting multi-scale visual representations..."):
+                # Multi-crop spatial sampling to suppress background soil/canopy noise
+                w, h = image.size
+                min_dim = min(w, h)
+                
+                # Center crop focused on leaf blade
+                center_crop = image.crop((
+                    (w - min_dim) // 2,
+                    (h - min_dim) // 2,
+                    (w + min_dim) // 2,
+                    (h + min_dim) // 2
+                ))
+                
+                # Tight zoom crop (65% center area)
+                zoom_dim = int(min_dim * 0.65)
+                zoom_crop = image.crop((
+                    (w - zoom_dim) // 2,
+                    (h - zoom_dim) // 2,
+                    (w + zoom_dim) // 2,
+                    (h + zoom_dim) // 2
+                ))
+                
+                # Batch multi-view inference
+                inputs = processor(images=[image, center_crop, zoom_crop], return_tensors="pt")
                 with torch.no_grad():
                     outputs = model.get_image_features(pixel_values=inputs["pixel_values"])
                     if hasattr(outputs, "pooler_output") and outputs.pooler_output is not None:
@@ -103,10 +125,13 @@ with col2:
                     else:
                         feat = outputs[0]
                     
+                    # Normalize and fuse embeddings across views
                     feat = feat / feat.norm(dim=-1, keepdim=True)
-                    embedding = feat.cpu().numpy()
+                    avg_feat = feat.mean(dim=0, keepdim=True)
+                    avg_feat = avg_feat / avg_feat.norm(dim=-1, keepdim=True)
+                    embedding = avg_feat.cpu().numpy()
 
-                # Get base probabilities from probe
+                # Decision function / probabilities
                 if hasattr(clf, "predict_proba"):
                     raw_probs = clf.predict_proba(embedding)[0]
                 else:
@@ -114,8 +139,8 @@ with col2:
                     e_d = np.exp(d_func - np.max(d_func))
                     raw_probs = e_d / e_d.sum()
 
-                # Temperature scaling sharpening (T=0.45 sharpens separation and boosts top confidence)
-                T = 0.45
+                # Temperature scaling (T=0.50) for sharp confidence separation
+                T = 0.50
                 log_probs = np.log(np.clip(raw_probs, 1e-7, 1.0)) / T
                 exp_probs = np.exp(log_probs - np.max(log_probs))
                 probs = exp_probs / exp_probs.sum()
@@ -138,7 +163,7 @@ with col2:
             </div>
             """, unsafe_allow_html=True)
 
-            # Metrics
+            # Confidence breakdown metrics
             st.markdown("#### Confidence Breakdown")
             prob_cols = st.columns(len(class_names))
             for p_col, c_name, p_val in zip(prob_cols, class_names, probs):
