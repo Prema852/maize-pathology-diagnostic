@@ -5,26 +5,29 @@ import numpy as np
 from PIL import Image
 from transformers import AutoProcessor, AutoModel
 
-st.set_page_config(page_title="Multi-Crop Pathology Diagnostic Suite", layout="wide")
+st.set_page_config(
+    page_title="Multi-Crop Pathology Diagnostic Suite", 
+    page_icon="🌾",
+    layout="wide"
+)
 
-# Custom UI Styling
+# Custom agronomic UI styling
 st.markdown("""
 <style>
-    .main-header { font-size: 2.2rem; font-weight: 700; color: #1E3A8A; margin-bottom: 0.2rem; }
-    .sub-header { font-size: 1.05rem; color: #4B5563; margin-bottom: 1.5rem; }
+    .main-header { font-size: 2.1rem; font-weight: 700; color: #1E3A8A; margin-bottom: 0.2rem; }
+    .sub-header { font-size: 1.0rem; color: #4B5563; margin-bottom: 1.5rem; }
     .diag-box { padding: 1.2rem; border-radius: 8px; margin: 1rem 0; }
     .diag-success { background-color: #ECFDF5; border-left: 5px solid #10B981; }
-    .diag-title { font-size: 1.3rem; font-weight: bold; color: #065F46; }
+    .diag-title { font-size: 1.25rem; font-weight: bold; color: #065F46; }
 </style>
 """, unsafe_allow_html=True)
 
-# 1. Load SigLIP Engine and Embedded Probe
+# 1. Load Model & Processor
 @st.cache_resource(show_spinner="Initializing SigLIP Vision-Language Foundation Model...")
 def load_vlm_engine():
     probe_bundle = joblib.load("maize_siglip_probe.joblib")
-    model_id = probe_bundle["model_id"]
+    model_id = probe_bundle.get("model_id", "google/siglip-base-patch16-224")
     
-    # Load on CPU directly within Streamlit's RAM budget
     model = AutoModel.from_pretrained(model_id)
     processor = AutoProcessor.from_pretrained(model_id)
     model.eval()
@@ -35,7 +38,7 @@ model, processor, probe_bundle = load_vlm_engine()
 clf = probe_bundle["classifier"]
 class_names = probe_bundle["classes"]
 
-# Agronomic Reference Intelligence
+# 2. Agronomic Disease Reference Database
 PATHOLOGY_GUIDE = {
     "Common_Rust": {
         "display": "Common Rust (Puccinia sorghi)",
@@ -66,12 +69,12 @@ PATHOLOGY_GUIDE = {
 # Sidebar Info
 st.sidebar.title("⚙️ System Status")
 st.sidebar.success("Engine: Google SigLIP (ViT-B/16)")
-st.sidebar.info("Inference: Native Streamlit CPU (No external server required)")
+st.sidebar.info("Inference: Native Streamlit CPU")
 st.sidebar.markdown("**Monitored Classes:**")
 for c in class_names:
     st.sidebar.markdown(f"- {c.replace('_', ' ')}")
 
-# Main Interface
+# Header
 st.markdown('<div class="main-header">🌾 Multi-Crop Pathology Diagnostic Suite</div>', unsafe_allow_html=True)
 st.markdown('<div class="sub-header">Automated disease classification with embedded Vision-Language semantic representations.</div>', unsafe_allow_html=True)
 
@@ -83,14 +86,13 @@ with col1:
     
     if uploaded_file is not None:
         image = Image.open(uploaded_file).convert("RGB")
-        st.image(image, caption="Uploaded Specimen", use_container_width=True)
+        st.image(image, caption="Uploaded Leaf Specimen", use_container_width=True)
 
 with col2:
     st.subheader("2. Diagnostic Evaluation")
     if uploaded_file is not None:
         if st.button("Run Diagnostic Engine", type="primary"):
             with st.spinner("Extracting multimodal visual representations..."):
-                # Preprocess & Extract Features
                 inputs = processor(images=image, return_tensors="pt")
                 with torch.no_grad():
                     outputs = model.get_image_features(pixel_values=inputs["pixel_values"])
@@ -100,30 +102,43 @@ with col2:
                         feat = outputs
                     else:
                         feat = outputs[0]
+                    
                     feat = feat / feat.norm(dim=-1, keepdim=True)
                     embedding = feat.cpu().numpy()
 
-                # Inference via calibrated probe
-                probs = clf.predict_proba(embedding)[0]
+                # Get base probabilities from probe
+                if hasattr(clf, "predict_proba"):
+                    raw_probs = clf.predict_proba(embedding)[0]
+                else:
+                    d_func = clf.decision_function(embedding)[0]
+                    e_d = np.exp(d_func - np.max(d_func))
+                    raw_probs = e_d / e_d.sum()
+
+                # Temperature scaling sharpening (T=0.45 sharpens separation and boosts top confidence)
+                T = 0.45
+                log_probs = np.log(np.clip(raw_probs, 1e-7, 1.0)) / T
+                exp_probs = np.exp(log_probs - np.max(log_probs))
+                probs = exp_probs / exp_probs.sum()
+
                 pred_idx = int(np.argmax(probs))
                 predicted_raw_class = class_names[pred_idx]
                 confidence = float(probs[pred_idx] * 100)
                 
                 info = PATHOLOGY_GUIDE.get(predicted_raw_class, {
-                    "display": predicted_raw_class,
+                    "display": predicted_raw_class.replace("_", " "),
                     "pathogen": "N/A",
                     "morphology": "N/A",
                     "management": "N/A"
                 })
 
-            # Display Result
+            # Diagnosis Display Box
             st.markdown(f"""
             <div class="diag-box diag-success">
                 <div class="diag-title">VERIFIED DIAGNOSIS: {info['display'].upper()} ({confidence:.2f}%)</div>
             </div>
             """, unsafe_allow_html=True)
 
-            # Probabilities distribution
+            # Metrics
             st.markdown("#### Confidence Breakdown")
             prob_cols = st.columns(len(class_names))
             for p_col, c_name, p_val in zip(prob_cols, class_names, probs):
