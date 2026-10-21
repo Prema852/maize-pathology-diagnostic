@@ -25,7 +25,7 @@ st.markdown("""
 # 1. Load Model & Processor
 @st.cache_resource(show_spinner="Initializing SigLIP Vision-Language Foundation Model...")
 def load_vlm_engine():
-    probe_bundle = joblib.load("maize_siglip_probe.joblib")
+    probe_bundle = joblib.load("maize_siglip_probe (2).joblib")
     model_id = probe_bundle.get("model_id", "google/siglip-base-patch16-224")
     
     model = AutoModel.from_pretrained(model_id)
