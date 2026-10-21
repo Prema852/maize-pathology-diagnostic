@@ -1,10 +1,9 @@
 streamlit
 torch
-transformers>=4.45.0
-accelerate
-pillow
+transformers
 scikit-learn
 joblib
+pillow
 numpy
-qwen-vl-utils
-torchvision
+sentencepiece
+protobuf
